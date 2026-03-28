@@ -36,7 +36,9 @@ Return ONLY the @startuml...@enduml code, nothing else.`
 }
 
 function encodePlantUML(text) {
+  // PlantUML custom base64 alphabet
   const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
+
   function encode64(data) {
     let r = "";
     for (let i = 0; i < data.length; i += 3) {
@@ -45,14 +47,41 @@ function encodePlantUML(text) {
     }
     return r;
   }
-  try {
+
+  // Deflate compression using raw deflate via CompressionStream (modern browsers)
+  async function deflateAsync(str) {
+    const input = new TextEncoder().encode(str);
+    const cs = new CompressionStream("deflate-raw");
+    const writer = cs.writable.getWriter();
+    writer.write(input);
+    writer.close();
+    const chunks = [];
+    const reader = cs.readable.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    const total = chunks.reduce((a, c) => a + c.length, 0);
+    const result = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.length; }
+    return result;
+  }
+
+  // Return a promise-based URL builder
+  return deflateAsync(text).then(compressed => {
+    return "~1" + encode64(compressed);
+  }).catch(() => {
+    // fallback: simple latin1 encoding without compression
     const bytes = new Uint8Array(unescape(encodeURIComponent(text)).split("").map(c=>c.charCodeAt(0)));
     return encode64(bytes);
-  } catch { return ""; }
+  });
 }
 
-function plantUMLUrl(code) {
-  return `https://www.plantuml.com/plantuml/png/${encodePlantUML(code)}`;
+async function plantUMLUrl(code) {
+  const encoded = await encodePlantUML(code);
+  return `https://www.plantuml.com/plantuml/png/${encoded}`;
 }
 
 /* ─── exemples PlantUML ───────────────────────────────────────────────────── */
@@ -400,7 +429,7 @@ export default function App() {
     }
     setLoading(true); setResult(null); setImgError(false);
     const code = await callClaude(inputText, selectedType);
-    const imageUrl = plantUMLUrl(code);
+    const imageUrl = await plantUMLUrl(code);
     setResult({ code, imageUrl });
     setHistory(h => [{
       id: Date.now(), title: inputText.slice(0,40), type: selectedType,
@@ -410,9 +439,11 @@ export default function App() {
     setLoading(false);
   };
 
-  const loadExample = (type) => {
+  const loadExample = async (type) => {
     setSelectedType(type);
-    setResult({ code: EXAMPLES[type], imageUrl: plantUMLUrl(EXAMPLES[type]) });
+    const code = EXAMPLES[type];
+    const imageUrl = await plantUMLUrl(code);
+    setResult({ code, imageUrl });
     setImgError(false);
   };
 
